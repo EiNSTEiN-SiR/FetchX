@@ -47,7 +47,9 @@ object LinkDetector {
 
     fun fileNameFromUrl(url: String): String {
         if (url.startsWith("magnet:", ignoreCase = true)) {
-            val dn = Uri.parse(url).getQueryParameter("dn")
+            // magnet: URIs are opaque, so Uri.getQueryParameter() throws; read the display name by hand.
+            val dn = Regex("[?&]dn=([^&]+)", RegexOption.IGNORE_CASE).find(url)?.groupValues?.get(1)
+                ?.let { runCatching { java.net.URLDecoder.decode(it, "UTF-8") }.getOrNull() }
             return dn?.takeIf { it.isNotBlank() }?.sanitize() ?: "magnet-download"
         }
         val last = runCatching { Uri.parse(url).lastPathSegment }.getOrNull().orEmpty()
