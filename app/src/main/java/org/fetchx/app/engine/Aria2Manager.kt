@@ -105,7 +105,6 @@ class Aria2Manager(private val context: Context) {
             "--rpc-listen-port=$port",
             "--rpc-listen-all=false",
             "--rpc-secret=$secret",
-            "--stop-with-process=${android.os.Process.myPid()}",
         )
         args += extra
         NativePaths.caBundle(context)?.let { args += "--ca-certificate=${it.absolutePath}" }
@@ -184,7 +183,12 @@ class Aria2Manager(private val context: Context) {
             .url("http://127.0.0.1:$port/jsonrpc")
             .post(body.toRequestBody(json))
             .build()
-        http.newCall(req).execute().use { resp ->
+        val call = try {
+            http.newCall(req).execute()
+        } catch (e: java.io.IOException) {
+            throw Aria2Exception("aria2c is not reachable: ${e.message}")
+        }
+        call.use { resp ->
             val text = resp.body?.string().orEmpty()
             val obj = runCatching { JSONObject(text) }.getOrNull()
                 ?: throw Aria2Exception("Bad RPC response (${resp.code})")
@@ -262,7 +266,7 @@ class Aria2Manager(private val context: Context) {
         )
         val st = try {
             rpc("aria2.tellStatus", gid, keys) as? JSONObject
-        } catch (e: Aria2Exception) {
+        } catch (e: Exception) {
             return Aria2Poll.Missing
         } ?: return Aria2Poll.Missing
 

@@ -28,6 +28,8 @@ data class DownloadEntity(
     val status: Status = Status.QUEUED,
     /** yt-dlp format selector, null for aria2. */
     val formatSelector: String? = null,
+    /** JSON-encoded yt-dlp options (codec, container, audio settings, extras). */
+    val ytOptions: String? = null,
     val audioOnly: Boolean = false,
     val threads: Int = 16,
     /** SAF tree uri string; null means public Downloads/FetchX through MediaStore. */
@@ -107,7 +109,7 @@ interface DownloadDao {
     suspend fun clearFinished()
 }
 
-@Database(entities = [DownloadEntity::class], version = 1, exportSchema = false)
+@Database(entities = [DownloadEntity::class], version = 2, exportSchema = false)
 @TypeConverters(Converters::class)
 abstract class AppDb : RoomDatabase() {
     abstract fun downloads(): DownloadDao

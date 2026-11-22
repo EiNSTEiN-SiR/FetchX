@@ -21,7 +21,13 @@ import org.fetchx.app.data.AppSettings
 import org.fetchx.app.data.DownloadEntity
 import org.fetchx.app.data.Engine
 import org.fetchx.app.data.ThemeMode
+import org.fetchx.app.engine.AudioFormatPref
+import org.fetchx.app.engine.CodecPref
+import org.fetchx.app.engine.ContainerPref
+import org.fetchx.app.engine.FormatSelector
 import org.fetchx.app.engine.LinkDetector
+import org.fetchx.app.engine.MediaType
+import org.fetchx.app.engine.YtOptions
 import org.fetchx.app.engine.LinkKind
 import org.fetchx.app.engine.ProbeResult
 
@@ -39,6 +45,18 @@ data class AddState(
     val userAgent: String = "",
     val referer: String = "",
     val headers: String = "",
+    val type: MediaType = MediaType.VIDEO_AUDIO,
+    val custom: Boolean = false,
+    val videoId: String? = null,
+    val audioId: String? = null,
+    val codec: CodecPref = CodecPref.AUTO,
+    val container: ContainerPref = ContainerPref.AUTO,
+    val audioFmt: AudioFormatPref = AudioFormatPref.ORIGINAL,
+    val audioQuality: Int = 0,
+    val embedMetadata: Boolean = false,
+    val embedThumbnail: Boolean = false,
+    val subtitles: Boolean = false,
+    val sponsorBlock: Boolean = false,
 ) {
     val engine: Engine get() = if (forceDirect) Engine.ARIA2 else LinkDetector.engineFor(kind)
     val valid: Boolean get() = kind != LinkKind.INVALID && link.isNotBlank()
@@ -148,22 +166,68 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun setAddReferer(v: String) { _add.value = _add.value?.copy(referer = v) }
     fun setAddHeaders(v: String) { _add.value = _add.value?.copy(headers = v) }
 
+    fun updateAdd(f: (AddState) -> AddState) {
+        _add.value = _add.value?.let(f)
+    }
+
+    /** Turns the add-sheet choices into the options stored with the task. Null means nothing is selected. */
+    private fun buildOptions(st: AddState): YtOptions? {
+        val extras = YtOptions(
+            embedMetadata = st.embedMetadata,
+            embedThumbnail = st.embedThumbnail,
+            subtitles = st.subtitles,
+            sponsorBlock = st.sponsorBlock,
+        )
+        val p = st.probe ?: return extras
+        if (st.custom) {
+            val v = st.videoId
+            val a = st.audioId
+            if (v == null && a == null) return null
+            val type = when {
+                v != null && a == null -> MediaType.VIDEO_ONLY
+                v == null -> MediaType.AUDIO_ONLY
+                else -> MediaType.VIDEO_AUDIO
+            }
+            return extras.copy(
+                selector = listOfNotNull(v, a).joinToString("+"),
+                type = type,
+                container = if (type == MediaType.AUDIO_ONLY) null else st.container.value,
+                audioFormat = st.audioFmt.value,
+                audioQuality = st.audioQuality,
+            )
+        }
+        val heights = listOf(0) + p.heights
+        val h = heights.getOrElse(st.selected) { 0 }
+        return extras.copy(
+            selector = FormatSelector.build(st.type, h, st.codec),
+            type = st.type,
+            container = if (st.type == MediaType.AUDIO_ONLY) null else st.container.value,
+            audioFormat = st.audioFmt.value,
+            audioQuality = st.audioQuality,
+        )
+    }
+
     fun submit() {
         val st = _add.value ?: return
         if (!st.valid || st.probing) return
-        val opt = if (st.engine == Engine.YTDLP) st.probe?.options?.getOrNull(st.selected) else null
+        val opts = if (st.engine == Engine.YTDLP) buildOptions(st) else null
+        if (st.engine == Engine.YTDLP && opts == null) {
+            messages.tryEmit("Pick at least one video or audio stream")
+            return
+        }
         viewModelScope.launch {
             controller.enqueue(
                 url = st.link,
                 engine = st.engine,
                 title = st.probe?.title,
-                formatSelector = opt?.selector,
-                audioOnly = opt?.audioOnly ?: false,
+                formatSelector = null,
+                audioOnly = false,
                 threads = st.threads,
                 destTreeUri = st.destTreeUri,
                 userAgent = st.userAgent,
                 referer = st.referer,
                 headers = st.headers,
+                ytOptions = opts,
             )
             messages.tryEmit("Added to queue")
         }
@@ -184,11 +248,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun clearClipboardOffer() { _clipboardOffer.value = null }
 
     /** Queues a media URL found by the in-app browser, reusing the browser's cookies, User-Agent and referer. */
-    fun downloadSniffed(url: String, kind: String, pageTitle: String, userAgent: String?, referer: String?, cookie: String?) {
+    fun downloadSniffed(url: String, kind: String, label: String, pageTitle: String, userAgent: String?, referer: String?, cookie: String?) {
         val headers = if (cookie.isNullOrBlank()) "" else "Cookie: $cookie"
         val stream = kind == "HLS" || kind == "DASH"
         val base = pageTitle.replace(Regex("[\\\\/:*?\"<>|\\u0000-\\u001f]"), "_").trim().take(120)
-        val fileName = if (stream || base.isBlank()) null else "$base.${kind.lowercase()}"
+        val tag = if (label != kind) " [" + label.removePrefix("$kind ") + "]" else ""
+        val fileName = if (stream || base.isBlank()) null else "$base$tag.${kind.lowercase()}"
         viewModelScope.launch {
             val threads = settings.value?.defaultThreads ?: 16
             controller.enqueue(
@@ -261,6 +326,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun setReferer(v: String) = viewModelScope.launch { settingsRepo.setReferer(v) }
     fun setDest(v: String) = viewModelScope.launch { settingsRepo.setDest(v) }
     fun setClipboardWatch(v: Boolean) = viewModelScope.launch { settingsRepo.setClipboard(v) }
+    fun setYtNightly(v: Boolean) = viewModelScope.launch { settingsRepo.setYtNightly(v) }
 
     fun folderLabel(treeUri: String?): String {
         if (treeUri.isNullOrBlank()) return "Downloads/FetchX"
@@ -298,7 +364,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         _updating.value = true
         _updateStatus.value = "Checking GitHub releases…"
         viewModelScope.launch {
-            val msg = runCatching { controller.ytdlp.update() }
+            val msg = runCatching { controller.ytdlp.update(settings.value?.ytNightly == true) }
                 .getOrElse { "Update failed: ${it.message}" }
             _updateStatus.value = msg
             _ytVersion.value = withContext(Dispatchers.IO) { controller.ytdlp.version() }

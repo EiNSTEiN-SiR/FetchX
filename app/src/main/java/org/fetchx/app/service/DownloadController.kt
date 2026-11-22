@@ -23,7 +23,9 @@ import org.fetchx.app.engine.Aria2Manager
 import org.fetchx.app.engine.Aria2Poll
 import org.fetchx.app.engine.Exporter
 import org.fetchx.app.engine.LinkDetector
+import org.fetchx.app.engine.MediaType
 import org.fetchx.app.engine.YtDlpManager
+import org.fetchx.app.engine.YtOptions
 import org.fetchx.app.engine.YtProgress
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
@@ -65,6 +67,7 @@ class DownloadController(private val context: Context) {
         referer: String?,
         headers: String?,
         fileName: String? = null,
+        ytOptions: YtOptions? = null,
     ): Long {
         val s = settings.flow.first()
         val isMagnet = url.startsWith("magnet:", ignoreCase = true)
@@ -74,8 +77,9 @@ class DownloadController(private val context: Context) {
             pageUrl = if (engine == Engine.YTDLP) url else null,
             title = title?.takeIf { it.isNotBlank() } ?: name,
             engine = engine,
-            formatSelector = formatSelector,
-            audioOnly = audioOnly,
+            formatSelector = ytOptions?.selector ?: formatSelector,
+            ytOptions = ytOptions?.toJson(),
+            audioOnly = audioOnly || ytOptions?.type == MediaType.AUDIO_ONLY,
             threads = threads.coerceIn(1, 32),
             destTreeUri = destTreeUri ?: s.destTreeUri.ifBlank { null },
             userAgent = userAgent?.takeIf { it.isNotBlank() } ?: s.userAgent.ifBlank { null },
@@ -309,8 +313,9 @@ class DownloadController(private val context: Context) {
                 processId = processId(id),
                 url = t.url,
                 workDir = workDir(id),
-                selector = t.formatSelector,
-                audioOnly = t.audioOnly,
+                options = YtOptions.fromJson(t.ytOptions).let { o ->
+                    if (t.ytOptions == null && t.formatSelector != null) o.copy(selector = t.formatSelector) else o
+                },
                 threads = t.threads,
                 userAgent = t.userAgent,
                 referer = t.referer,

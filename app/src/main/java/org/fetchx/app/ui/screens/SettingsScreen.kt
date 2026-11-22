@@ -188,6 +188,9 @@ fun SettingsScreen(vm: AppViewModel, s: AppSettings) {
                 }
             },
         )
+        SettingRow("Nightly yt-dlp builds", "Newer site fixes, updated more often", trailing = {
+            Switch(checked = s.ytNightly, onCheckedChange = vm::setYtNightly)
+        })
         SettingRow("aria2c", "Bundled, controlled over JSON-RPC")
         SettingRow("FFmpeg", "Bundled, used by yt-dlp to merge streams")
         Divider()

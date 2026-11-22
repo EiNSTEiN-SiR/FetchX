@@ -131,30 +131,7 @@ fun AddSheet(vm: AppViewModel, st: AddState) {
                         }
                     }
 
-                    st.probe != null -> {
-                        Text(st.probe.title, style = MaterialTheme.typography.titleSmall, maxLines = 2)
-                        Column {
-                            st.probe.options.forEachIndexed { i, opt ->
-                                Row(
-                                    Modifier
-                                        .fillMaxWidth()
-                                        .clickable { vm.selectQuality(i) },
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    RadioButton(selected = st.selected == i, onClick = { vm.selectQuality(i) })
-                                    Text(opt.label, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
-                                    if (opt.approxBytes > 0) {
-                                        Text(
-                                            "~" + Format.bytes(opt.approxBytes),
-                                            fontFamily = FontFamily.Monospace,
-                                            fontSize = 11.sp,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
+                    st.probe != null -> YtOptionsPanel(vm, st, st.probe)
                 }
             } else if (st.forceDirect) {
                 TextButton(onClick = { vm.setForceDirect(false); vm.probe() }) { Text("Use yt-dlp instead") }

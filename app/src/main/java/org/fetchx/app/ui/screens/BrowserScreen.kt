@@ -61,9 +61,12 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import okhttp3.OkHttpClient
+import okhttp3.Request
 import org.fetchx.app.ui.AppViewModel
+import org.json.JSONArray
 
-data class SniffedMedia(val url: String, val kind: String, val pageUrl: String?)
+data class SniffedMedia(val url: String, val kind: String, val pageUrl: String?, val label: String = kind)
 
 object Sniffer {
     private val video = setOf("mp4", "webm", "mkv", "m4v", "mov", "flv", "3gp", "avi")
@@ -83,6 +86,38 @@ object Sniffer {
     }
 
     fun isStream(kind: String) = kind == "HLS" || kind == "DASH"
+}
+
+private val apiHttp = OkHttpClient()
+
+/**
+ * Many sites expose their MP4/HLS qualities through a small JSON API ("get_media") that the player calls in the
+ * background. Fetch it with the browser's cookies and list every quality it returns.
+ */
+private fun probeMediaApi(url: String, page: String, ua: String, depth: Int, onFound: (SniffedMedia) -> Unit) {
+    Thread {
+        runCatching {
+            val rb = Request.Builder().url(url)
+            if (ua.isNotBlank()) rb.header("User-Agent", ua)
+            if (page.isNotBlank()) rb.header("Referer", page)
+            CookieManager.getInstance().getCookie(url)?.let { rb.header("Cookie", it) }
+            val body = apiHttp.newCall(rb.build()).execute().use { it.body?.string().orEmpty() }
+            val arr = JSONArray(body)
+            for (i in 0 until arr.length()) {
+                val o = arr.optJSONObject(i) ?: continue
+                val v = o.optString("videoUrl")
+                if (!v.startsWith("http")) continue
+                if (v.contains("get_media") && depth < 2) {
+                    probeMediaApi(v, page, ua, depth + 1, onFound)
+                    continue
+                }
+                val format = o.optString("format").lowercase()
+                val q = o.opt("quality")?.toString().orEmpty().let { if (it.startsWith("[")) "" else it }
+                val kind = if (format == "hls" || v.substringBefore('?').lowercase().endsWith(".m3u8")) "HLS" else "MP4"
+                onFound(SniffedMedia(v, kind, page, if (q.isNotBlank()) "$kind ${q}p" else kind))
+            }
+        }
+    }.start()
 }
 
 private fun normalize(text: String): String {
@@ -109,6 +144,8 @@ fun BrowserScreen(vm: AppViewModel, onClose: () -> Unit) {
     var webView by remember { mutableStateOf<WebView?>(null) }
     val found = remember { mutableStateListOf<SniffedMedia>() }
     val pageRef = remember { java.util.concurrent.atomic.AtomicReference("") }
+    val uaRef = remember { java.util.concurrent.atomic.AtomicReference("") }
+    val probed = remember { java.util.concurrent.ConcurrentHashMap.newKeySet<String>() }
 
     BackHandler {
         val w = webView
@@ -145,6 +182,7 @@ fun BrowserScreen(vm: AppViewModel, onClose: () -> Unit) {
                 factory = { ctx ->
                     WebView(ctx).apply {
                         settings.javaScriptEnabled = true
+                        uaRef.set(settings.userAgentString.orEmpty())
                         settings.domStorageEnabled = true
                         settings.mediaPlaybackRequiresUserGesture = true
                         settings.loadWithOverviewMode = true
@@ -158,6 +196,13 @@ fun BrowserScreen(vm: AppViewModel, onClose: () -> Unit) {
                                 // Runs on a background thread: never call WebView methods here.
                                 try {
                                     val u = request?.url?.toString() ?: return null
+                                    if (u.contains("get_media") && probed.add(u)) {
+                                        probeMediaApi(u, pageRef.get(), uaRef.get(), 0) { m ->
+                                            main.post {
+                                                runCatching { if (found.none { it.url == m.url }) found.add(m) }
+                                            }
+                                        }
+                                    }
                                     val kind = Sniffer.classify(u)
                                     if (kind != null) {
                                         val page = pageRef.get()
@@ -174,6 +219,7 @@ fun BrowserScreen(vm: AppViewModel, onClose: () -> Unit) {
 
                             override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
                                 found.clear()
+                                probed.clear()
                                 pageRef.set(url.orEmpty())
                                 pageUrl = url.orEmpty()
                                 input = url.orEmpty()
@@ -255,13 +301,13 @@ fun BrowserScreen(vm: AppViewModel, onClose: () -> Unit) {
                                 val cookie = runCatching {
                                     CookieManager.getInstance().getCookie(m.url) ?: CookieManager.getInstance().getCookie(pageUrl)
                                 }.getOrNull()
-                                vm.downloadSniffed(m.url, m.kind, pageTitle, ua, m.pageUrl ?: pageUrl, cookie)
+                                vm.downloadSniffed(m.url, m.kind, m.label, pageTitle, ua, m.pageUrl ?: pageUrl, cookie)
                                 Toast.makeText(context, "Added to queue", Toast.LENGTH_SHORT).show()
                                 showList = false
                             }
                             .padding(horizontal = 16.dp, vertical = 10.dp),
                     ) {
-                        Text(m.kind, fontFamily = FontFamily.Monospace, fontSize = 12.sp, color = MaterialTheme.colorScheme.primary)
+                        Text(m.label, fontFamily = FontFamily.Monospace, fontSize = 12.sp, color = MaterialTheme.colorScheme.primary)
                         Text(
                             m.url,
                             fontFamily = FontFamily.Monospace,

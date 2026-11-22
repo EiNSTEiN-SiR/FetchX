@@ -23,6 +23,7 @@ data class AppSettings(
     val referer: String = "",
     val destTreeUri: String = "",
     val clipboardWatch: Boolean = true,
+    val ytNightly: Boolean = false,
 )
 
 class SettingsRepo(private val context: Context) {
@@ -36,6 +37,7 @@ class SettingsRepo(private val context: Context) {
         val referer = stringPreferencesKey("referer")
         val dest = stringPreferencesKey("dest")
         val clipboard = booleanPreferencesKey("clipboard")
+        val ytNightly = booleanPreferencesKey("ytNightly")
     }
 
     val flow: Flow<AppSettings> = context.store.data.map { p ->
@@ -49,6 +51,7 @@ class SettingsRepo(private val context: Context) {
             referer = p[K.referer] ?: "",
             destTreeUri = p[K.dest] ?: "",
             clipboardWatch = p[K.clipboard] ?: true,
+            ytNightly = p[K.ytNightly] ?: false,
         )
     }
 
@@ -61,4 +64,5 @@ class SettingsRepo(private val context: Context) {
     suspend fun setReferer(v: String) = context.store.edit { it[K.referer] = v }
     suspend fun setDest(v: String) = context.store.edit { it[K.dest] = v }
     suspend fun setClipboard(v: Boolean) = context.store.edit { it[K.clipboard] = v }
+    suspend fun setYtNightly(v: Boolean) = context.store.edit { it[K.ytNightly] = v }
 }

@@ -11,18 +11,40 @@ import org.json.JSONObject
 import java.io.File
 import java.util.Locale
 
-data class QualityOption(
-    val label: String,
-    val selector: String,
-    val audioOnly: Boolean,
-    val approxBytes: Long,
-)
+data class FormatInfo(
+    val id: String,
+    val hasVideo: Boolean,
+    val hasAudio: Boolean,
+    val height: Int,
+    val fps: Int,
+    val vcodec: String,
+    val acodec: String,
+    val ext: String,
+    val tbr: Int,
+    val sizeBytes: Long,
+) {
+    val label: String
+        get() {
+            val size = if (sizeBytes > 0) " • ~" + org.fetchx.app.ui.Format.bytes(sizeBytes) else ""
+            val rate = if (tbr > 0) " • ${tbr}k" else ""
+            return if (hasVideo) {
+                val res = if (height > 0) "${height}p" + (if (fps > 30) fps.toString() else "") else "video"
+                val audio = if (hasAudio) " • +audio" else ""
+                "$res • ${YtDlpManager.codecName(vcodec)} • $ext$rate$audio$size  [$id]"
+            } else {
+                "${YtDlpManager.codecName(acodec)} • $ext$rate$size  [$id]"
+            }
+        }
+}
 
 data class ProbeResult(
     val title: String,
     val uploader: String?,
     val durationSec: Long,
-    val options: List<QualityOption>,
+    /** Available heights, highest first. */
+    val heights: List<Int>,
+    val videoFormats: List<FormatInfo>,
+    val audioFormats: List<FormatInfo>,
 )
 
 data class YtProgress(
@@ -34,6 +56,22 @@ data class YtProgress(
 )
 
 class YtDlpManager(private val context: Context) {
+
+    companion object {
+        fun codecName(c: String): String = when {
+            c.startsWith("av01") || c.startsWith("av1") -> "AV1"
+            c.startsWith("vp09") || c.startsWith("vp9") -> "VP9"
+            c.startsWith("vp8") -> "VP8"
+            c.startsWith("avc") || c.startsWith("h264") -> "H.264"
+            c.startsWith("hev") || c.startsWith("hvc") || c.startsWith("h265") -> "H.265"
+            c.startsWith("mp4a") || c == "aac" -> "AAC"
+            c.startsWith("opus") -> "Opus"
+            c.startsWith("vorbis") -> "Vorbis"
+            c.startsWith("ec-3") || c.startsWith("ac-3") -> "Dolby"
+            c.startsWith("mp3") -> "MP3"
+            else -> c.substringBefore('.').take(8)
+        }
+    }
 
     @Volatile private var ready = false
 
@@ -49,17 +87,48 @@ class YtDlpManager(private val context: Context) {
 
     fun version(): String? = runCatching { YoutubeDL.getInstance().version(context) }.getOrNull()
 
-    /** Updates the bundled yt-dlp from its GitHub releases. Returns a human-readable status. */
-    suspend fun update(): String = withContext(Dispatchers.IO) {
+    /** Looks up the nightly channel object without a compile-time dependency on its exact class layout. */
+    private fun nightlyChannel(): Any? {
+        for (n in listOf(
+            "com.yausername.youtubedl_android.YoutubeDL\$UpdateChannel\$NIGHTLY",
+            "com.yausername.youtubedl_android.UpdateChannel\$NIGHTLY",
+        )) {
+            runCatching { return Class.forName(n).getField("INSTANCE").get(null) }
+        }
+        for (n in listOf(
+            "com.yausername.youtubedl_android.YoutubeDL\$UpdateChannel",
+            "com.yausername.youtubedl_android.UpdateChannel",
+        )) {
+            runCatching { return Class.forName(n).getField("_NIGHTLY").get(null) }
+        }
+        return null
+    }
+
+    private fun updateNightly(ytdl: YoutubeDL): Boolean {
+        val channel = nightlyChannel() ?: return false
+        val m = ytdl.javaClass.methods.firstOrNull { it.name == "updateYoutubeDL" && it.parameterTypes.size == 2 } ?: return false
+        m.invoke(ytdl, context, channel)
+        return true
+    }
+
+    /** Updates the bundled yt-dlp from its GitHub releases (stable or nightly). Returns a human-readable status. */
+    suspend fun update(nightly: Boolean): String = withContext(Dispatchers.IO) {
         init()
         val before = version()
-        val status = YoutubeDL.getInstance().updateYoutubeDL(context)
-        val after = version()
-        when {
-            status == null -> "Update check finished (installed: ${after ?: "unknown"})"
-            before != null && before == after -> "Already up to date (${after})"
-            else -> "Updated yt-dlp: ${before ?: "?"} → ${after ?: "?"}"
+        val ytdl = YoutubeDL.getInstance()
+        var note = ""
+        if (nightly) {
+            val ok = runCatching { updateNightly(ytdl) }.getOrDefault(false)
+            if (!ok) {
+                note = " (nightly channel unavailable, used stable)"
+                ytdl.updateYoutubeDL(context)
+            }
+        } else {
+            ytdl.updateYoutubeDL(context)
         }
+        val after = version()
+        if (before != null && before == after) "Already up to date ($after)$note"
+        else "Updated yt-dlp: ${before ?: "?"} → ${after ?: "?"}$note"
     }
 
     private fun applyNetworkOptions(
@@ -95,52 +164,63 @@ class YtDlpManager(private val context: Context) {
         parse(JSONObject(out.substring(start)))
     }
 
+    private fun JSONObject.str(key: String): String =
+        optString(key, "").let { if (it == "null") "" else it }
+
     private fun parse(root: JSONObject): ProbeResult {
         // A playlist-like result: use the first entry.
         val info = root.optJSONArray("entries")?.optJSONObject(0) ?: root
         val title = info.optString("title").ifBlank { root.optString("title", "video") }
         val formats = info.optJSONArray("formats")
 
+        val video = mutableListOf<FormatInfo>()
+        val audio = mutableListOf<FormatInfo>()
         val heights = sortedSetOf<Int>()
-        val sizeByHeight = HashMap<Int, Long>()
-        var bestAudioSize = 0L
-        var hasAudio = false
 
         if (formats != null) {
             for (i in 0 until formats.length()) {
-                val f = formats.getJSONObject(i)
-                val vcodec = f.optString("vcodec", "none")
-                val acodec = f.optString("acodec", "none")
+                val f = formats.optJSONObject(i) ?: continue
+                val vc = f.str("vcodec").let { if (it.isBlank() || it == "none") "" else it }
+                val ac = f.str("acodec").let { if (it.isBlank() || it == "none") "" else it }
+                val ext = f.str("ext")
+                val note = f.str("format_note")
+                if (ext == "mhtml" || note.contains("storyboard", ignoreCase = true)) continue
+                if (vc.isEmpty() && ac.isEmpty()) continue
+                val id = f.str("format_id")
+                if (id.isEmpty()) continue
                 val size = f.optLong("filesize", 0).takeIf { it > 0 } ?: f.optLong("filesize_approx", 0)
-                if (vcodec != "none" && f.optInt("height", 0) > 0) {
-                    val h = f.optInt("height")
-                    heights += h
-                    if (size > (sizeByHeight[h] ?: 0L)) sizeByHeight[h] = size
-                }
-                if (acodec != "none") {
-                    hasAudio = true
-                    if (vcodec == "none" && size > bestAudioSize) bestAudioSize = size
+                val height = f.optInt("height", 0)
+                val tbr = f.optDouble("tbr", 0.0).let { if (it.isNaN()) 0 else it.toInt() }
+                val fi = FormatInfo(
+                    id = id,
+                    hasVideo = vc.isNotEmpty(),
+                    hasAudio = ac.isNotEmpty(),
+                    height = height,
+                    fps = f.optInt("fps", 0),
+                    vcodec = vc,
+                    acodec = ac,
+                    ext = ext,
+                    tbr = tbr,
+                    sizeBytes = size,
+                )
+                if (fi.hasVideo) {
+                    video += fi
+                    if (height > 0) heights += height
+                } else {
+                    audio += fi
                 }
             }
         }
 
-        val options = mutableListOf<QualityOption>()
-        options += QualityOption("Best available", "bv*+ba/b", false, 0)
-        for (h in heights.descendingSet()) {
-            val size = (sizeByHeight[h] ?: 0L) + bestAudioSize
-            options += QualityOption(
-                label = "${h}p",
-                selector = "bv*[height<=$h]+ba/b[height<=$h]/b",
-                audioOnly = false,
-                approxBytes = size,
-            )
-        }
-        if (hasAudio) options += QualityOption("Audio only (m4a)", "ba[ext=m4a]/ba/b", true, bestAudioSize)
         return ProbeResult(
             title = title,
             uploader = info.optString("uploader").takeIf { it.isNotBlank() },
             durationSec = info.optLong("duration", 0),
-            options = options,
+            heights = heights.descendingSet().toList(),
+            videoFormats = video
+                .sortedWith(compareByDescending<FormatInfo> { it.height }.thenByDescending { it.tbr })
+                .take(60),
+            audioFormats = audio.sortedByDescending { it.tbr }.take(30),
         )
     }
 
@@ -152,8 +232,7 @@ class YtDlpManager(private val context: Context) {
         processId: String,
         url: String,
         workDir: File,
-        selector: String?,
-        audioOnly: Boolean,
+        options: YtOptions,
         threads: Int,
         userAgent: String?,
         referer: String?,
@@ -177,12 +256,32 @@ class YtDlpManager(private val context: Context) {
         req.addOption("--windows-filenames")
         req.addOption("-P", workDir.absolutePath)
         req.addOption("-o", "%(title)s [%(id)s].%(ext)s")
-        req.addOption("-f", selector ?: "bv*+ba/b")
-        if (audioOnly) {
+        req.addOption("-f", options.selector)
+        if (options.type == MediaType.AUDIO_ONLY) {
             req.addOption("-x")
-            req.addOption("--audio-format", "m4a")
+            if (options.audioFormat == "original") {
+                req.addOption("--audio-format", "best")
+            } else {
+                req.addOption("--audio-format", options.audioFormat)
+                req.addOption("--audio-quality", if (options.audioQuality > 0) "${options.audioQuality}K" else "0")
+            }
         } else {
-            req.addOption("--merge-output-format", "mp4/mkv")
+            options.container?.let { req.addOption("--merge-output-format", it) }
+        }
+        if (options.embedMetadata) {
+            req.addOption("--embed-metadata")
+            req.addOption("--embed-chapters")
+        }
+        if (options.embedThumbnail) {
+            req.addOption("--embed-thumbnail")
+            req.addOption("--convert-thumbnails", "jpg")
+        }
+        if (options.subtitles) {
+            req.addOption("--embed-subs")
+            req.addOption("--sub-langs", "en.*,.*-orig")
+        }
+        if (options.sponsorBlock) {
+            req.addOption("--sponsorblock-remove", "sponsor,selfpromo,interaction")
         }
         applyNetworkOptions(req, userAgent, referer, headers, cookieFile)
 
