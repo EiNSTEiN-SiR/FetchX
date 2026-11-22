@@ -1,0 +1,2 @@
+-keep class com.yausername.** { *; }
+-keep class org.fetchx.app.data.** { *; }
