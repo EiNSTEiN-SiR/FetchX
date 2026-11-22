@@ -72,72 +72,97 @@ class Aria2Manager(private val context: Context) {
         }
     } ?: false
 
+    private val tuning = listOf(
+        "--max-concurrent-downloads=16",
+        "--async-dns=false",
+        "--console-log-level=warn",
+        "--summary-interval=0",
+        "--file-allocation=none",
+        "--auto-file-renaming=false",
+        "--allow-overwrite=true",
+        "--continue=true",
+        "--always-resume=true",
+        "--max-tries=6",
+        "--retry-wait=3",
+        "--timeout=30",
+        "--connect-timeout=15",
+        "--seed-time=0",
+        "--bt-enable-lpd=true",
+        "--enable-dht=true",
+        "--enable-dht6=false",
+        "--bt-save-metadata=false",
+        "--follow-torrent=true",
+        "--check-integrity=false",
+        "--disk-cache=16M",
+    )
+
+    /** Starts aria2c with [extra] options. Returns null on success, otherwise the captured error output. */
+    private suspend fun tryStart(bin: File, extra: List<String>): String? {
+        port = ServerSocket(0).use { it.localPort }
+        val args = mutableListOf(
+            bin.absolutePath,
+            "--enable-rpc=true",
+            "--rpc-listen-port=$port",
+            "--rpc-listen-all=false",
+            "--rpc-secret=$secret",
+            "--stop-with-process=${android.os.Process.myPid()}",
+        )
+        args += extra
+        NativePaths.caBundle(context)?.let { args += "--ca-certificate=${it.absolutePath}" }
+
+        val pb = ProcessBuilder(args).redirectErrorStream(true)
+        pb.environment().apply {
+            put("LD_LIBRARY_PATH", NativePaths.libraryDirs(context))
+            put("HOME", context.filesDir.absolutePath)
+            put("TMPDIR", context.cacheDir.absolutePath)
+        }
+        pb.directory(context.filesDir)
+        val p = try {
+            pb.start()
+        } catch (e: Exception) {
+            return "could not launch ${bin.absolutePath}: ${e.message}"
+        }
+        process = p
+        val output = StringBuffer()
+        Thread {
+            runCatching {
+                p.inputStream.bufferedReader().forEachLine {
+                    Log.d("aria2c", it)
+                    if (output.length < 1500) output.append(it).append(" | ")
+                }
+            }
+        }.apply { isDaemon = true }.start()
+
+        repeat(40) {
+            if (!alive()) {
+                delay(300)
+                return "exit ${runCatching { p.exitValue() }.getOrNull()}: ${output.toString().ifBlank { "no output" }}"
+            }
+            try {
+                rpc("aria2.getVersion")
+                return null
+            } catch (_: Exception) {
+                delay(150)
+            }
+        }
+        runCatching { p.destroy() }
+        process = null
+        return "RPC did not respond: ${output.toString().ifBlank { "no output" }}"
+    }
+
     suspend fun ensureStarted() = startLock.withLock {
         if (alive()) return@withLock
         withContext(Dispatchers.IO) {
             val bin = NativePaths.aria2Binary(context)
                 ?: throw Aria2Exception("aria2c binary not found in the app package")
-            port = ServerSocket(0).use { it.localPort }
+            bin.setExecutable(true, false)
 
-            val args = mutableListOf(
-                bin.absolutePath,
-                "--enable-rpc=true",
-                "--rpc-listen-port=$port",
-                "--rpc-listen-all=false",
-                "--rpc-secret=$secret",
-                "--stop-with-process=${android.os.Process.myPid()}",
-                "--max-concurrent-downloads=16",
-                "--async-dns=false",
-                "--console-log-level=warn",
-                "--summary-interval=0",
-                "--file-allocation=none",
-                "--auto-file-renaming=false",
-                "--allow-overwrite=true",
-                "--continue=true",
-                "--always-resume=true",
-                "--max-tries=6",
-                "--retry-wait=3",
-                "--timeout=30",
-                "--connect-timeout=15",
-                "--seed-time=0",
-                "--bt-enable-lpd=true",
-                "--enable-dht=true",
-                "--enable-dht6=false",
-                "--bt-save-metadata=false",
-                "--follow-torrent=true",
-                "--check-integrity=false",
-                "--disk-cache=16M",
-                "--conf-path=/dev/null",
-            )
-            NativePaths.caBundle(context)?.let { args += "--ca-certificate=${it.absolutePath}" }
-
-            val pb = ProcessBuilder(args).redirectErrorStream(true)
-            pb.environment().apply {
-                put("LD_LIBRARY_PATH", NativePaths.libraryDirs(context))
-                put("HOME", context.filesDir.absolutePath)
-                put("TMPDIR", context.cacheDir.absolutePath)
-            }
-            pb.directory(context.filesDir)
-            val p = pb.start()
-            process = p
-            Thread {
-                runCatching {
-                    p.inputStream.bufferedReader().forEachLine { Log.d("aria2c", it) }
-                }
-            }.apply { isDaemon = true }.start()
-
-            var lastError: Exception? = null
-            repeat(60) {
-                if (!alive()) throw Aria2Exception("aria2c exited during startup (exit ${runCatching { p.exitValue() }.getOrNull()})")
-                try {
-                    rpc("aria2.getVersion")
-                    return@withContext
-                } catch (e: Exception) {
-                    lastError = e
-                    delay(150)
-                }
-            }
-            throw Aria2Exception("aria2c RPC did not come up: ${lastError?.message}")
+            val first = tryStart(bin, tuning) ?: return@withContext
+            shutdown()
+            // Retry with RPC options only, in case this aria2 build rejects one of the tuning options.
+            val second = tryStart(bin, emptyList()) ?: return@withContext
+            shutdown()
+            throw Aria2Exception("aria2c failed to start. [full] $first [minimal] $second [bin] ${bin.absolutePath}")
         }
     }
 
