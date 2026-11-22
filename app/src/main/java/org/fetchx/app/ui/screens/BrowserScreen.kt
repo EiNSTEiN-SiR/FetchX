@@ -108,6 +108,7 @@ fun BrowserScreen(vm: AppViewModel, onClose: () -> Unit) {
     var showList by remember { mutableStateOf(false) }
     var webView by remember { mutableStateOf<WebView?>(null) }
     val found = remember { mutableStateListOf<SniffedMedia>() }
+    val pageRef = remember { java.util.concurrent.atomic.AtomicReference("") }
 
     BackHandler {
         val w = webView
@@ -148,40 +149,50 @@ fun BrowserScreen(vm: AppViewModel, onClose: () -> Unit) {
                         settings.mediaPlaybackRequiresUserGesture = true
                         settings.loadWithOverviewMode = true
                         settings.useWideViewPort = true
-                        CookieManager.getInstance().setAcceptCookie(true)
-                        CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
+                        runCatching {
+                            CookieManager.getInstance().setAcceptCookie(true)
+                            CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
+                        }
                         webViewClient = object : WebViewClient() {
-                            override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
-                                val u = request.url.toString()
-                                val kind = Sniffer.classify(u)
-                                if (kind != null) {
-                                    val page = view.url
-                                    main.post {
-                                        if (found.none { it.url == u }) found.add(SniffedMedia(u, kind, page))
+                            override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? {
+                                // Runs on a background thread: never call WebView methods here.
+                                try {
+                                    val u = request?.url?.toString() ?: return null
+                                    val kind = Sniffer.classify(u)
+                                    if (kind != null) {
+                                        val page = pageRef.get()
+                                        main.post {
+                                            runCatching {
+                                                if (found.none { it.url == u }) found.add(SniffedMedia(u, kind, page))
+                                            }
+                                        }
                                     }
+                                } catch (_: Throwable) {
                                 }
                                 return null
                             }
 
-                            override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
+                            override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
                                 found.clear()
-                                pageUrl = url
-                                input = url
+                                pageRef.set(url.orEmpty())
+                                pageUrl = url.orEmpty()
+                                input = url.orEmpty()
                             }
 
-                            override fun onPageFinished(view: WebView, url: String) {
-                                pageUrl = url
-                                input = url
-                                canBack = view.canGoBack()
-                                canForward = view.canGoForward()
+                            override fun onPageFinished(view: WebView?, url: String?) {
+                                pageRef.set(url.orEmpty())
+                                pageUrl = url.orEmpty()
+                                input = url.orEmpty()
+                                canBack = view?.canGoBack() == true
+                                canForward = view?.canGoForward() == true
                             }
                         }
                         webChromeClient = object : WebChromeClient() {
-                            override fun onProgressChanged(view: WebView, newProgress: Int) {
+                            override fun onProgressChanged(view: WebView?, newProgress: Int) {
                                 progress = newProgress
                             }
 
-                            override fun onReceivedTitle(view: WebView, title: String?) {
+                            override fun onReceivedTitle(view: WebView?, title: String?) {
                                 pageTitle = title.orEmpty()
                             }
                         }
@@ -189,7 +200,7 @@ fun BrowserScreen(vm: AppViewModel, onClose: () -> Unit) {
                         loadUrl("https://duckduckgo.com")
                     }
                 },
-                onRelease = { it.destroy() },
+                onRelease = { w -> runCatching { w.stopLoading(); w.loadUrl("about:blank"); w.destroy() } },
             )
 
             HorizontalDivider(thickness = 1.dp, color = MaterialTheme.colorScheme.outlineVariant)
@@ -241,8 +252,9 @@ fun BrowserScreen(vm: AppViewModel, onClose: () -> Unit) {
                             .fillMaxWidth()
                             .clickable {
                                 val ua = webView?.settings?.userAgentString
-                                val cookie = CookieManager.getInstance().getCookie(m.url)
-                                    ?: CookieManager.getInstance().getCookie(pageUrl)
+                                val cookie = runCatching {
+                                    CookieManager.getInstance().getCookie(m.url) ?: CookieManager.getInstance().getCookie(pageUrl)
+                                }.getOrNull()
                                 vm.downloadSniffed(m.url, m.kind, pageTitle, ua, m.pageUrl ?: pageUrl, cookie)
                                 Toast.makeText(context, "Added to queue", Toast.LENGTH_SHORT).show()
                                 showList = false

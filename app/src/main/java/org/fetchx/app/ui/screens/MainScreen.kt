@@ -19,6 +19,8 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -36,7 +38,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import org.fetchx.app.data.AppSettings
 import org.fetchx.app.ui.AppViewModel
 
@@ -127,4 +131,43 @@ fun MainScreen(vm: AppViewModel, settings: AppSettings) {
     }
 
     if (add != null) AddSheet(vm, add!!)
+
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val crashFile = (ctx.applicationContext as org.fetchx.app.App).crashFile
+    var crash by remember { mutableStateOf(runCatching { crashFile.takeIf { it.exists() }?.readText() }.getOrNull()) }
+    crash?.let { text ->
+        AlertDialog(
+            onDismissRequest = { },
+            title = { Text("FetchX crashed last time") },
+            text = {
+                androidx.compose.foundation.layout.Column(
+                    Modifier.androidx_scroll(),
+                ) {
+                    androidx.compose.foundation.text.selection.SelectionContainer {
+                        Text(
+                            text,
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                            fontSize = 10.sp,
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val cm = ctx.getSystemService(android.content.ClipboardManager::class.java)
+                    cm.setPrimaryClip(android.content.ClipData.newPlainText("crash", text))
+                }) { Text("Copy") }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    runCatching { crashFile.delete() }
+                    crash = null
+                }) { Text("Dismiss") }
+            },
+        )
+    }
 }
+
+@androidx.compose.runtime.Composable
+private fun Modifier.androidx_scroll(): Modifier =
+    this.then(Modifier.verticalScroll(androidx.compose.foundation.rememberScrollState()))
