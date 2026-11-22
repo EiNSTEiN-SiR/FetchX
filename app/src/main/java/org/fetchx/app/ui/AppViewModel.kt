@@ -183,6 +183,30 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun clearClipboardOffer() { _clipboardOffer.value = null }
 
+    /** Queues a media URL found by the in-app browser, reusing the browser's cookies, User-Agent and referer. */
+    fun downloadSniffed(url: String, kind: String, pageTitle: String, userAgent: String?, referer: String?, cookie: String?) {
+        val headers = if (cookie.isNullOrBlank()) "" else "Cookie: $cookie"
+        val stream = kind == "HLS" || kind == "DASH"
+        val base = pageTitle.replace(Regex("[\\\\/:*?\"<>|\\u0000-\\u001f]"), "_").trim().take(120)
+        val fileName = if (stream || base.isBlank()) null else "$base.${kind.lowercase()}"
+        viewModelScope.launch {
+            val threads = settings.value?.defaultThreads ?: 16
+            controller.enqueue(
+                url = url,
+                engine = if (stream) Engine.YTDLP else Engine.ARIA2,
+                title = base.ifBlank { null },
+                formatSelector = null,
+                audioOnly = false,
+                threads = threads,
+                destTreeUri = null,
+                userAgent = userAgent,
+                referer = referer,
+                headers = headers,
+                fileName = fileName,
+            )
+        }
+    }
+
     // ------------------------------------------------------------ task actions
 
     fun pause(id: Long) = controller.pause(id)

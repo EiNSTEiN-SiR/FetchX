@@ -7,6 +7,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.DeleteSweep
@@ -33,6 +34,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import org.fetchx.app.data.AppSettings
@@ -44,6 +46,7 @@ private enum class Tab(val label: String) { Active("Active"), Completed("Complet
 @Composable
 fun MainScreen(vm: AppViewModel, settings: AppSettings) {
     var tabIndex by rememberSaveable { mutableIntStateOf(0) }
+    var browserOpen by rememberSaveable { mutableStateOf(false) }
     val tab = Tab.entries[tabIndex]
     val snackbar = remember { SnackbarHostState() }
     val add by vm.add.collectAsState()
@@ -60,7 +63,9 @@ fun MainScreen(vm: AppViewModel, settings: AppSettings) {
         if (result == SnackbarResult.ActionPerformed) vm.showAdd(link)
     }
 
-    Scaffold(
+    if (browserOpen) {
+        BrowserScreen(vm, onClose = { browserOpen = false })
+    } else Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
@@ -70,6 +75,7 @@ fun MainScreen(vm: AppViewModel, settings: AppSettings) {
                 actions = {
                     when (tab) {
                         Tab.Active -> {
+                            IconButton(onClick = { browserOpen = true }) { Icon(Icons.Default.Public, "Browser") }
                             IconButton(onClick = vm::resumeAll) { Icon(Icons.Default.PlayArrow, "Resume all") }
                             IconButton(onClick = vm::pauseAll) { Icon(Icons.Default.Pause, "Pause all") }
                         }

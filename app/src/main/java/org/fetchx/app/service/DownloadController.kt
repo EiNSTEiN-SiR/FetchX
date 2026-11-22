@@ -64,6 +64,7 @@ class DownloadController(private val context: Context) {
         userAgent: String?,
         referer: String?,
         headers: String?,
+        fileName: String? = null,
     ): Long {
         val s = settings.flow.first()
         val isMagnet = url.startsWith("magnet:", ignoreCase = true)
@@ -81,7 +82,7 @@ class DownloadController(private val context: Context) {
             referer = referer?.takeIf { it.isNotBlank() } ?: s.referer.ifBlank { null },
             headers = headers?.takeIf { it.isNotBlank() },
             useCookies = cookieFile.exists() && cookieFile.length() > 0,
-            outName = if (engine == Engine.ARIA2 && !isMagnet && LinkDetector.kind(url).name != "TORRENT_FILE") name else null,
+            outName = fileName ?: if (engine == Engine.ARIA2 && !isMagnet && LinkDetector.kind(url).name != "TORRENT_FILE") name else null,
         )
         val id = dao.insert(entity)
         schedule()
