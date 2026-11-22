@@ -12,6 +12,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import org.fetchx.app.App
@@ -22,7 +23,6 @@ import org.fetchx.app.ui.Format
 class DownloadService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var monitor: Job? = null
-    private var idleTicks = 0
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -43,13 +43,13 @@ class DownloadService : Service() {
             val running = list.filter { it.status == Status.RUNNING }
             val queued = list.count { it.status == Status.QUEUED }
             if (running.isEmpty() && queued == 0) {
-                if (++idleTicks >= 3) {
-                    stopForeground(STOP_FOREGROUND_REMOVE)
-                    stopSelf()
-                }
+                // Nothing left to do: wait briefly (a new emission cancels this) and then remove the notification.
+                delay(1500)
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                getSystemService(android.app.NotificationManager::class.java).cancel(Notifications.ID)
+                stopSelf()
                 return@collectLatest
             }
-            idleTicks = 0
             val speed = running.sumOf { it.speedBps }
             val total = running.sumOf { it.totalBytes }
             val done = running.sumOf { it.doneBytes }
