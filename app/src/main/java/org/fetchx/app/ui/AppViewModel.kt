@@ -21,9 +21,11 @@ import org.fetchx.app.data.AppSettings
 import org.fetchx.app.data.DownloadEntity
 import org.fetchx.app.data.Engine
 import org.fetchx.app.data.ThemeMode
+import org.fetchx.app.data.Wallpaper
 import org.fetchx.app.engine.AudioFormatPref
 import org.fetchx.app.engine.CodecPref
 import org.fetchx.app.engine.ContainerPref
+import org.fetchx.app.engine.FileNames
 import org.fetchx.app.engine.FormatSelector
 import org.fetchx.app.engine.LinkDetector
 import org.fetchx.app.engine.MediaType
@@ -251,7 +253,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun downloadSniffed(url: String, kind: String, label: String, pageTitle: String, userAgent: String?, referer: String?, cookie: String?) {
         val headers = if (cookie.isNullOrBlank()) "" else "Cookie: $cookie"
         val stream = kind == "HLS" || kind == "DASH"
-        val base = pageTitle.replace(Regex("[\\\\/:*?\"<>|\\u0000-\\u001f]"), "_").trim().take(120)
+        val base = FileNames.sanitize(pageTitle).let { if (FileNames.isGeneric(it)) "" else it }
         val tag = if (label != kind) " [" + label.removePrefix("$kind ") + "]" else ""
         val fileName = if (stream || base.isBlank()) null else "$base$tag.${kind.lowercase()}"
         viewModelScope.launch {
@@ -327,6 +329,25 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun setDest(v: String) = viewModelScope.launch { settingsRepo.setDest(v) }
     fun setClipboardWatch(v: Boolean) = viewModelScope.launch { settingsRepo.setClipboard(v) }
     fun setYtNightly(v: Boolean) = viewModelScope.launch { settingsRepo.setYtNightly(v) }
+
+    fun setWallpaper(uri: Uri) {
+        viewModelScope.launch(Dispatchers.IO) {
+            if (Wallpaper.import(getApplication(), uri)) {
+                settingsRepo.setWallpaperVersion(System.currentTimeMillis())
+            } else {
+                messages.tryEmit("Could not load that image")
+            }
+        }
+    }
+
+    fun clearWallpaper() {
+        viewModelScope.launch(Dispatchers.IO) {
+            Wallpaper.remove(getApplication())
+            settingsRepo.setWallpaperVersion(0L)
+        }
+    }
+
+    fun setWallpaperAlpha(v: Int) = viewModelScope.launch { settingsRepo.setWallpaperAlpha(v) }
 
     fun folderLabel(treeUri: String?): String {
         if (treeUri.isNullOrBlank()) return "Downloads/FetchX"

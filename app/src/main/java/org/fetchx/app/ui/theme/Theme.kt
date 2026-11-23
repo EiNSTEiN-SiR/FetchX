@@ -1,7 +1,12 @@
 package org.fetchx.app.ui.theme
 
+import android.graphics.BitmapFactory
 import android.os.Build
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
@@ -11,6 +16,17 @@ import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import org.fetchx.app.data.Wallpaper
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -38,6 +54,9 @@ private fun ColorScheme.pureBlack(): ColorScheme = copy(
     outlineVariant = Color(0xFF2A2A2A),
 )
 
+/** True while a custom wallpaper is showing, so screens leave their backgrounds transparent. */
+val LocalWallpaperActive = compositionLocalOf { false }
+
 @Composable
 fun FetchXTheme(settings: AppSettings, content: @Composable () -> Unit) {
     val dark = when (settings.theme) {
@@ -54,5 +73,33 @@ fun FetchXTheme(settings: AppSettings, content: @Composable () -> Unit) {
         else -> lightColorScheme()
     }
     if (dark && settings.amoled) scheme = scheme.pureBlack()
-    MaterialTheme(colorScheme = scheme, shapes = flatShapes, content = content)
+    MaterialTheme(colorScheme = scheme, shapes = flatShapes) {
+        val base = MaterialTheme.colorScheme.background
+        val wallpaper by produceState<ImageBitmap?>(null, settings.wallpaperVersion) {
+            value = if (settings.wallpaperVersion == 0L) {
+                null
+            } else {
+                withContext(Dispatchers.IO) {
+                    runCatching { BitmapFactory.decodeFile(Wallpaper.file(context).absolutePath)?.asImageBitmap() }.getOrNull()
+                }
+            }
+        }
+        CompositionLocalProvider(LocalWallpaperActive provides (wallpaper != null)) {
+            Box(Modifier.fillMaxSize().background(base)) {
+                wallpaper?.let { bmp ->
+                    val alpha = settings.wallpaperAlpha.coerceIn(0, 100) / 100f
+                    Image(
+                        bitmap = bmp,
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        alpha = alpha,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                    // Light scrim that grows with the opacity, so text stays readable on busy images.
+                    Box(Modifier.fillMaxSize().background(base.copy(alpha = 0.35f * alpha)))
+                }
+                content()
+            }
+        }
+    }
 }

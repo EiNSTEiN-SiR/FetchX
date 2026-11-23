@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
@@ -24,6 +25,10 @@ data class AppSettings(
     val destTreeUri: String = "",
     val clipboardWatch: Boolean = true,
     val ytNightly: Boolean = false,
+    /** 0 = no wallpaper; otherwise the time the image was imported (used to reload it). */
+    val wallpaperVersion: Long = 0L,
+    /** Wallpaper opacity, 0..100 percent. */
+    val wallpaperAlpha: Int = 40,
 )
 
 class SettingsRepo(private val context: Context) {
@@ -38,6 +43,8 @@ class SettingsRepo(private val context: Context) {
         val dest = stringPreferencesKey("dest")
         val clipboard = booleanPreferencesKey("clipboard")
         val ytNightly = booleanPreferencesKey("ytNightly")
+        val wpVersion = longPreferencesKey("wpVersion")
+        val wpAlpha = intPreferencesKey("wpAlpha")
     }
 
     val flow: Flow<AppSettings> = context.store.data.map { p ->
@@ -52,6 +59,8 @@ class SettingsRepo(private val context: Context) {
             destTreeUri = p[K.dest] ?: "",
             clipboardWatch = p[K.clipboard] ?: true,
             ytNightly = p[K.ytNightly] ?: false,
+            wallpaperVersion = p[K.wpVersion] ?: 0L,
+            wallpaperAlpha = (p[K.wpAlpha] ?: 40).coerceIn(0, 100),
         )
     }
 
@@ -65,4 +74,6 @@ class SettingsRepo(private val context: Context) {
     suspend fun setDest(v: String) = context.store.edit { it[K.dest] = v }
     suspend fun setClipboard(v: Boolean) = context.store.edit { it[K.clipboard] = v }
     suspend fun setYtNightly(v: Boolean) = context.store.edit { it[K.ytNightly] = v }
+    suspend fun setWallpaperVersion(v: Long) = context.store.edit { it[K.wpVersion] = v }
+    suspend fun setWallpaperAlpha(v: Int) = context.store.edit { it[K.wpAlpha] = v.coerceIn(0, 100) }
 }

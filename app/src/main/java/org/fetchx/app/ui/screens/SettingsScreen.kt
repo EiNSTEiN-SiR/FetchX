@@ -4,6 +4,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -98,6 +99,9 @@ fun SettingsScreen(vm: AppViewModel, s: AppSettings) {
             vm.setDest(uri.toString())
         }
     }
+    val pickWallpaper = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri: Uri? ->
+        if (uri != null) vm.setWallpaper(uri)
+    }
     val pickCookies = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
         if (uri != null) vm.importCookies(uri)
     }
@@ -132,6 +136,25 @@ fun SettingsScreen(vm: AppViewModel, s: AppSettings) {
         SettingRow("Pure black", "AMOLED background in the dark theme", trailing = {
             Switch(checked = s.amoled, onCheckedChange = vm::setAmoled)
         })
+        val hasWallpaper = s.wallpaperVersion > 0L
+        SettingRow(
+            "Custom wallpaper",
+            if (hasWallpaper) "Image set" else "Pick an image from your gallery",
+            onClick = {
+                pickWallpaper.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+            },
+            trailing = { if (hasWallpaper) TextButton(onClick = vm::clearWallpaper) { Text("Remove") } },
+        )
+        if (hasWallpaper) {
+            Column(Modifier.padding(horizontal = 16.dp, vertical = 6.dp)) {
+                Text("Wallpaper opacity: ${s.wallpaperAlpha}%", fontFamily = FontFamily.Monospace, fontSize = 13.sp)
+                Slider(
+                    value = s.wallpaperAlpha.toFloat(),
+                    onValueChange = { vm.setWallpaperAlpha(it.toInt()) },
+                    valueRange = 0f..100f,
+                )
+            }
+        }
         Divider()
 
         SectionHeader("Downloads")
@@ -196,7 +219,7 @@ fun SettingsScreen(vm: AppViewModel, s: AppSettings) {
         Divider()
 
         SectionHeader("About")
-        SettingRow("FetchX", "Version ${BuildConfig.VERSION_NAME} • GPL-3.0")
+        SettingRow("FetchX by Emtrix", "Version ${BuildConfig.VERSION_NAME} • GPL-3.0")
         Divider()
     }
 }

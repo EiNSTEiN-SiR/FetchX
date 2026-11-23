@@ -90,6 +90,9 @@ object Sniffer {
 
 private val apiHttp = OkHttpClient()
 
+private const val OG_TITLE_JS =
+    """(function(){var m=document.querySelector("meta[property='og:title']");return m?m.getAttribute('content'):'';})()"""
+
 /**
  * Many sites expose their MP4/HLS qualities through a small JSON API ("get_media") that the player calls in the
  * background. Fetch it with the browser's cookies and list every quality it returns.
@@ -301,8 +304,21 @@ fun BrowserScreen(vm: AppViewModel, onClose: () -> Unit) {
                                 val cookie = runCatching {
                                     CookieManager.getInstance().getCookie(m.url) ?: CookieManager.getInstance().getCookie(pageUrl)
                                 }.getOrNull()
-                                vm.downloadSniffed(m.url, m.kind, m.label, pageTitle, ua, m.pageUrl ?: pageUrl, cookie)
-                                Toast.makeText(context, "Added to queue", Toast.LENGTH_SHORT).show()
+                                val queue = { title: String ->
+                                    vm.downloadSniffed(m.url, m.kind, m.label, title, ua, m.pageUrl ?: pageUrl, cookie)
+                                    Toast.makeText(context, "Added to queue", Toast.LENGTH_SHORT).show()
+                                }
+                                val wv = webView
+                                if (wv != null) {
+                                    // Prefer the page's og:title over the document title.
+                                    wv.evaluateJavascript(OG_TITLE_JS) { raw ->
+                                        val og = runCatching { JSONArray("[" + raw + "]").optString(0) }.getOrDefault("")
+                                            .let { if (it == "null") "" else it }
+                                        queue(og.ifBlank { pageTitle })
+                                    }
+                                } else {
+                                    queue(pageTitle)
+                                }
                                 showList = false
                             }
                             .padding(horizontal = 16.dp, vertical = 10.dp),

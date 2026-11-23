@@ -3,4 +3,10 @@
     <style name="Theme.FetchX" parent="Theme.Material3.DayNight.NoActionBar">
         <item name="android:windowBackground">@android:color/transparent</item>
     </style>
+
+    <style name="Theme.FetchX.Splash" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/splash_bg</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_splash</item>
+        <item name="postSplashScreenTheme">@style/Theme.FetchX</item>
+    </style>
 </resources>

@@ -1,5 +1,7 @@
 # FetchX
 
+_FetchX by Emtrix_
+
 Open-source Android download manager: aria2c for direct files and torrents, yt-dlp + FFmpeg for video pages.
 Kotlin, Jetpack Compose, Material 3 (dynamic color, optional pure-black theme), Room, WorkManager.
 
@@ -26,3 +28,7 @@ Local: `gradle assembleRelease` (Gradle 8.9+, JDK 17), or open in Android Studio
 - aria2 allows at most 16 connections per server; higher thread counts only help with mirrors and torrents.
 - Licensed GPL-3.0, as the bundled youtubedl-android/yt-dlp/FFmpeg/aria2 components are GPL.
 - Use it only for content you have the right to download.
+
+## Credits
+
+- Wordmark font: [Outfit](https://github.com/Outfitio/Outfit-Fonts), SIL Open Font License 1.1 (see `licenses/OFL-Outfit.txt`).

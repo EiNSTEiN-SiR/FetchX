@@ -1,6 +1,7 @@
 package org.fetchx.app.ui.screens
 
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -37,12 +38,16 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.fetchx.app.data.AppSettings
 import org.fetchx.app.ui.AppViewModel
+import org.fetchx.app.ui.theme.LocalWallpaperActive
+import org.fetchx.app.ui.theme.Wordmark
 
 private enum class Tab(val label: String) { Active("Active"), Completed("Completed"), Settings("Settings") }
 
@@ -52,6 +57,8 @@ fun MainScreen(vm: AppViewModel, settings: AppSettings) {
     var tabIndex by rememberSaveable { mutableIntStateOf(0) }
     var browserOpen by rememberSaveable { mutableStateOf(false) }
     val tab = Tab.entries[tabIndex]
+    val wallpaper = LocalWallpaperActive.current
+    val surface = if (wallpaper) Color.Transparent else MaterialTheme.colorScheme.background
     val snackbar = remember { SnackbarHostState() }
     val add by vm.add.collectAsState()
     val offer by vm.clipboardOffer.collectAsState()
@@ -70,12 +77,22 @@ fun MainScreen(vm: AppViewModel, settings: AppSettings) {
     if (browserOpen) {
         BrowserScreen(vm, onClose = { browserOpen = false })
     } else Scaffold(
-        containerColor = MaterialTheme.colorScheme.background,
+        containerColor = surface,
         snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
             TopAppBar(
-                title = { Text(tab.label) },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
+                title = {
+                    Row(verticalAlignment = Alignment.Bottom) {
+                        Wordmark(fontSize = 24.sp)
+                        Text(
+                            tab.label,
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(start = 10.dp, bottom = 3.dp),
+                        )
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = surface),
                 actions = {
                     when (tab) {
                         Tab.Active -> {
@@ -92,7 +109,10 @@ fun MainScreen(vm: AppViewModel, settings: AppSettings) {
             )
         },
         bottomBar = {
-            NavigationBar(containerColor = MaterialTheme.colorScheme.background, tonalElevation = 0.dp) {
+            NavigationBar(
+                containerColor = if (wallpaper) MaterialTheme.colorScheme.background.copy(alpha = 0.6f) else MaterialTheme.colorScheme.background,
+                tonalElevation = 0.dp,
+            ) {
                 Tab.entries.forEachIndexed { i, t ->
                     NavigationBarItem(
                         selected = tabIndex == i,

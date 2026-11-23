@@ -22,6 +22,9 @@ import org.fetchx.app.engine.Aria2Job
 import org.fetchx.app.engine.Aria2Manager
 import org.fetchx.app.engine.Aria2Poll
 import org.fetchx.app.engine.Exporter
+import org.fetchx.app.engine.FileNames
+import org.fetchx.app.engine.LinkKind
+import org.fetchx.app.engine.PageTitle
 import org.fetchx.app.engine.LinkDetector
 import org.fetchx.app.engine.MediaType
 import org.fetchx.app.engine.YtDlpManager
@@ -75,7 +78,9 @@ class DownloadController(private val context: Context) {
         val entity = DownloadEntity(
             url = url,
             pageUrl = if (engine == Engine.YTDLP) url else null,
-            title = title?.takeIf { it.isNotBlank() } ?: name,
+            title = title?.takeIf { it.isNotBlank() && !FileNames.isGeneric(it) }
+                ?: name.takeIf { !FileNames.isGeneric(it) }
+                ?: "Untitled",
             engine = engine,
             formatSelector = ytOptions?.selector ?: formatSelector,
             ytOptions = ytOptions?.toJson(),
@@ -332,19 +337,66 @@ class DownloadController(private val context: Context) {
 
     // ---------------------------------------------------------------- completion
 
+    private fun isTorrent(t: DownloadEntity): Boolean =
+        t.engine == Engine.ARIA2 &&
+            (t.url.startsWith("magnet:", ignoreCase = true) || LinkDetector.kind(t.url) == LinkKind.TORRENT_FILE)
+
+    /** The page the media came from: the browser page for sniffed streams, or the page URL for yt-dlp tasks. */
+    private suspend fun fetchPageTitle(t: DownloadEntity): String? {
+        val cookie = t.headers?.lines()?.firstOrNull { it.startsWith("Cookie:", ignoreCase = true) }
+            ?.substringAfter(':')?.trim()
+        val candidates = listOfNotNull(t.referer, t.pageUrl).filter { it != t.url }.distinct()
+        for (c in candidates) {
+            PageTitle.fetch(c, t.userAgent, cookie)?.let { return it }
+        }
+        return null
+    }
+
+    /**
+     * Replaces placeholder names ("hls [hls].mp4", "index.mp4"...) before the files are saved.
+     * Companion files such as subtitles keep the same base name as the main file.
+     */
+    private suspend fun polishNames(t: DownloadEntity, files: List<File>): List<File> {
+        if (files.isEmpty() || isTorrent(t)) return files
+        val primary = files.maxByOrNull { it.length() } ?: return files
+        val ext = primary.extension.lowercase()
+        if (t.engine == Engine.ARIA2 && ext !in FileNames.mediaExt) return files
+
+        val oldBase = primary.name.removeSuffix("." + primary.extension)
+        val newBase = FileNames.resolveBase(oldBase, t.title, ext in FileNames.audioExt) { fetchPageTitle(t) }
+        if (newBase == oldBase) return files
+
+        return files.map { f ->
+            if (!f.name.startsWith(oldBase)) return@map f
+            val suffix = f.name.removePrefix(oldBase)
+            var target = File(f.parentFile, newBase + suffix)
+            var n = 1
+            while (target.exists() && target.absolutePath != f.absolutePath) {
+                target = File(f.parentFile, "$newBase ($n)$suffix")
+                n++
+            }
+            if (f.renameTo(target)) target else f
+        }
+    }
+
     private suspend fun finish(t: DownloadEntity, files: List<File>, total: Long) = withContext(Dispatchers.IO) {
-        val existing = files.filter { it.exists() && it.isFile }
-        if (existing.isEmpty()) {
+        val found = files.filter { it.exists() && it.isFile }
+        if (found.isEmpty()) {
             dao.setStatus(t.id, Status.FAILED, "Download finished but no output file was found")
             return@withContext
         }
         try {
+            val existing = polishNames(t, found)
             var firstUri: String? = null
             for (f in existing) {
                 val uri = Exporter.export(context, f, t.destTreeUri)
                 if (firstUri == null) firstUri = uri
             }
-            val finalTitle = existing.singleOrNull()?.name ?: t.title
+            val finalTitle = if (isTorrent(t)) {
+                existing.singleOrNull()?.name ?: t.title
+            } else {
+                existing.maxByOrNull { it.length() }?.name ?: t.title
+            }
             dao.update((dao.get(t.id) ?: t).copy(title = finalTitle, totalBytes = total, doneBytes = total))
             dao.markCompleted(t.id, firstUri, System.currentTimeMillis())
             t.gid?.let { aria.remove(it) }
